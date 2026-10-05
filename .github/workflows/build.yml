@@ -1,0 +1,100 @@
+name: Build MobileHouseArrest
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build iOS app
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract source package
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f MobileHouseArrestSafe-Xcode.zip
+          rm -rf source
+          mkdir -p source
+          unzip -q MobileHouseArrestSafe-Xcode.zip -d source
+
+      - name: Locate project
+        id: project
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROJECT=$(find "$GITHUB_WORKSPACE/source" -type d -name 'MobileHouseArrestSafe.xcodeproj' -print -quit)
+          test -n "$PROJECT"
+          echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
+          echo "Project: $PROJECT"
+
+      - name: Show Xcode information
+        run: xcodebuild -version
+
+      - name: Inspect project
+        run: |
+          xcodebuild -project "${{ steps.project.outputs.project }}" -list
+
+      - name: Build unsigned app
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROJECT="${{ steps.project.outputs.project }}"
+          xcodebuild \
+            -project "$PROJECT" \
+            -target MobileHouseArrestSafe \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            build
+
+      - name: Locate built app
+        id: app
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP=$(find "$GITHUB_WORKSPACE/source" -type d -path '*/build/Release-iphoneos/MobileHouseArrestSafe.app' -print -quit)
+          if [ -z "$APP" ]; then
+            echo 'No MobileHouseArrestSafe.app found.'
+            find "$GITHUB_WORKSPACE/source" -type d -name '*.app' -print || true
+            exit 1
+          fi
+          echo "app=$APP" >> "$GITHUB_OUTPUT"
+          echo "App: $APP"
+
+      - name: Package unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf Payload dist
+          mkdir -p Payload dist
+          cp -R "${{ steps.app.outputs.app }}" Payload/MobileHouseArrestSafe.app
+          /usr/bin/zip -qry dist/MobileHouseArrest-unsigned.ipa Payload
+          ls -lh dist/MobileHouseArrest-unsigned.ipa
+
+      - name: Upload APP
+        uses: actions/upload-artifact@v4
+        with:
+          name: MobileHouseArrest-APP
+          path: "${{ steps.app.outputs.app }}"
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: MobileHouseArrest-IPA-unsigned
+          path: dist/MobileHouseArrest-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 7
