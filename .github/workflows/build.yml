@@ -11,226 +11,134 @@ permissions:
 
 jobs:
   build:
-    name: Build iOS app
+    name: Build and package iOS app
     runs-on: macos-latest
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ==========================================
-      # TÌM VÀ GIẢI NÉN SOURCE ZIP
-      # ==========================================
-      - name: Extract source package
+      - name: Find and extract source ZIP
         shell: bash
         run: |
-          set -e
-
-          echo "=== Files in repository ==="
-          find . -maxdepth 2 -type f -print
-
-          echo ""
-          echo "=== Searching ZIP ==="
-
-          ZIP_FILE=$(find "$GITHUB_WORKSPACE" \
-            -maxdepth 2 \
-            -type f \
-            -iname "*.zip" \
-            -print -quit)
-
+          set -euo pipefail
+          ZIP_FILE="$(find "$GITHUB_WORKSPACE" -maxdepth 2 -type f -iname '*.zip' -print -quit)"
           if [ -z "$ZIP_FILE" ]; then
-            echo "❌ Không tìm thấy file ZIP trong repository."
+            echo "ERROR: No source ZIP found."
             exit 1
           fi
+          echo "Using ZIP: $ZIP_FILE"
+          rm -rf "$GITHUB_WORKSPACE/source"
+          mkdir -p "$GITHUB_WORKSPACE/source"
+          unzip -q "$ZIP_FILE" -d "$GITHUB_WORKSPACE/source"
 
-          echo "✅ ZIP found:"
-          echo "$ZIP_FILE"
-
-          rm -rf source
-          mkdir -p source
-
-          echo ""
-          echo "=== Extracting ==="
-
-          unzip -q "$ZIP_FILE" -d source
-
-          echo ""
-          echo "=== Extracted files ==="
-          find source -maxdepth 5 -print
-
-      # ==========================================
-      # TÌM XCODE PROJECT
-      # ==========================================
-      - name: Locate project
+      - name: Locate Xcode project
         id: project
         shell: bash
         run: |
-          set -e
-
-          PROJECT=$(find "$GITHUB_WORKSPACE/source" \
-            -type d \
-            -name "*.xcodeproj" \
-            -print -quit)
-
+          set -euo pipefail
+          PROJECT="$(find "$GITHUB_WORKSPACE/source" -type d -name 'MobileHouseArrestSafe.xcodeproj' -print -quit)"
           if [ -z "$PROJECT" ]; then
-            echo "❌ Không tìm thấy .xcodeproj"
-            echo ""
-            echo "Các file trong source:"
-            find "$GITHUB_WORKSPACE/source" -maxdepth 6 -print
+            echo "ERROR: MobileHouseArrestSafe.xcodeproj not found."
             exit 1
           fi
-
-          echo "================================"
-          echo "Xcode project:"
-          echo "$PROJECT"
-          echo "================================"
-
+          echo "Project: $PROJECT"
           echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
 
-      # ==========================================
-      # XCODE VERSION
-      # ==========================================
       - name: Show Xcode information
-        run: |
-          xcodebuild -version
+        run: xcodebuild -version
 
-      # ==========================================
-      # KIỂM TRA PROJECT
-      # ==========================================
       - name: Inspect project
         run: |
-          PROJECT="${{ steps.project.outputs.project }}"
+          xcodebuild             -project "${{ steps.project.outputs.project }}"             -list
 
-          echo "=== Xcode project information ==="
-
-          xcodebuild \
-            -project "$PROJECT" \
-            -list
-
-      # ==========================================
-      # BUILD APP
-      # ==========================================
-      - name: Build unsigned app
+      - name: Build MobileHouseArrestSafe
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
+          xcodebuild             -project "${{ steps.project.outputs.project }}"             -target "MobileHouseArrestSafe"             -configuration Release             -sdk iphoneos             -destination 'generic/platform=iOS'             CODE_SIGNING_ALLOWED=NO             CODE_SIGNING_REQUIRED=NO             CODE_SIGN_IDENTITY=""             build
 
-          PROJECT="${{ steps.project.outputs.project }}"
-
-          echo "================================"
-          echo "Building MobileHouseArrestSafe"
-          echo "================================"
-
-          xcodebuild \
-            -project "$PROJECT" \
-            -target "MobileHouseArrestSafe" \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            build
-
-      # ==========================================
-      # TÌM APP ĐÃ BUILD
-      # ==========================================
-      - name: Locate built app
+      - name: Locate generated APP
         id: app
         shell: bash
         run: |
-          set -e
-
-          echo "=== Searching for APP ==="
-
-          APP=$(find "$GITHUB_WORKSPACE/source" \
-            -type d \
-            -name "MobileHouseArrestSafe.app" \
-            -print -quit)
-
+          set -euo pipefail
+          APP="$(find "$GITHUB_WORKSPACE/source" -type d -path '*/build/Release-iphoneos/*.app' -print -quit)"
           if [ -z "$APP" ]; then
-            echo "❌ Không tìm thấy MobileHouseArrestSafe.app"
+            APP="$(find "$GITHUB_WORKSPACE/source" -type d -name 'MobileHouseArrestSafe.app' -print -quit)"
+          fi
+          if [ -z "$APP" ]; then
+            echo "ERROR: .app was not produced."
+            find "$GITHUB_WORKSPACE/source" -type d -name '*.app' -print
+            exit 1
+          fi
+          echo "APP: $APP"
+          echo "app=$APP" >> "$GITHUB_OUTPUT"
 
-            echo ""
-            echo "=== All .app files ==="
-
-            find "$GITHUB_WORKSPACE/source" \
-              -type d \
-              -name "*.app" \
-              -print
-
+      - name: Validate APP
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="${{ steps.app.outputs.app }}"
+          test -d "$APP"
+          test -f "$APP/Info.plist"
+          test -f "$APP/MobileHouseArrestSafe"
+          BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")"
+          echo "Bundle ID: $BUNDLE_ID"
+          if [ "$BUNDLE_ID" != "com.nickdzvcl.mobilehousearrest" ]; then
+            echo "ERROR: Wrong Bundle ID"
             exit 1
           fi
 
-          echo "================================"
-          echo "✅ APP FOUND"
-          echo "$APP"
-          echo "================================"
-
-          echo "app=$APP" >> "$GITHUB_OUTPUT"
-
-      # ==========================================
-      # COPY APP
-      # ==========================================
-      - name: Prepare APP
-        run: |
-          set -e
-
-          APP="${{ steps.app.outputs.app }}"
-
-          rm -rf output
-          mkdir -p output
-
-          cp -R "$APP" \
-            "output/MobileHouseArrestSafe.app"
-
-          echo "=== APP ==="
-          ls -lah output
-
-      # ==========================================
-      # TẠO IPA
-      # ==========================================
-      - name: Package unsigned IPA
+      - name: Prepare Payload
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
+          rm -rf "$GITHUB_WORKSPACE/ipa"
+          mkdir -p "$GITHUB_WORKSPACE/ipa/Payload"
+          cp -R "${{ steps.app.outputs.app }}" "$GITHUB_WORKSPACE/ipa/Payload/MobileHouseArrestSafe.app"
+          test -d "$GITHUB_WORKSPACE/ipa/Payload/MobileHouseArrestSafe.app"
+          test -f "$GITHUB_WORKSPACE/ipa/Payload/MobileHouseArrestSafe.app/Info.plist"
+          find "$GITHUB_WORKSPACE/ipa/Payload" -maxdepth 2 -print
 
-          rm -rf Payload
-          mkdir Payload
+      - name: Create IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/ipa"
+          rm -f "$GITHUB_WORKSPACE/MobileHouseArrest-unsigned.ipa"
+          /usr/bin/zip -qry "$GITHUB_WORKSPACE/MobileHouseArrest-unsigned.ipa" Payload
+          ls -lh "$GITHUB_WORKSPACE/MobileHouseArrest-unsigned.ipa"
 
-          cp -R \
-            "output/MobileHouseArrestSafe.app" \
-            "Payload/MobileHouseArrestSafe.app"
+      - name: Validate IPA structure
+        shell: bash
+        run: |
+          set -euo pipefail
+          IPA="$GITHUB_WORKSPACE/MobileHouseArrest-unsigned.ipa"
+          TEST_DIR="$RUNNER_TEMP/ipa-check"
+          rm -rf "$TEST_DIR"
+          mkdir -p "$TEST_DIR"
+          unzip -q "$IPA" -d "$TEST_DIR"
+          test -d "$TEST_DIR/Payload"
+          test -d "$TEST_DIR/Payload/MobileHouseArrestSafe.app"
+          test -f "$TEST_DIR/Payload/MobileHouseArrestSafe.app/Info.plist"
+          test -f "$TEST_DIR/Payload/MobileHouseArrestSafe.app/MobileHouseArrestSafe"
+          BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$TEST_DIR/Payload/MobileHouseArrestSafe.app/Info.plist")"
+          if [ "$BUNDLE_ID" != "com.nickdzvcl.mobilehousearrest" ]; then
+            echo "ERROR: IPA contains wrong Bundle ID: $BUNDLE_ID"
+            exit 1
+          fi
+          echo "IPA VALIDATION PASSED"
+          echo "Bundle ID: $BUNDLE_ID"
+          find "$TEST_DIR" -maxdepth 3 -print
 
-          cd Payload
-
-          zip -r \
-            "../MobileHouseArrest-unsigned.ipa" \
-            "MobileHouseArrestSafe.app"
-
-          cd ..
-
-          echo ""
-          echo "================================"
-          echo "✅ IPA CREATED"
-          echo "================================"
-
-          ls -lh MobileHouseArrest-unsigned.ipa
-
-      # ==========================================
-      # UPLOAD APP
-      # ==========================================
       - name: Upload APP
         uses: actions/upload-artifact@v4
         with:
           name: MobileHouseArrest-APP
-          path: output/MobileHouseArrestSafe.app
+          path: ${{ steps.app.outputs.app }}
           retention-days: 7
 
-      # ==========================================
-      # UPLOAD IPA
-      # ==========================================
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
